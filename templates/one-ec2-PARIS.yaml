@@ -1,0 +1,108 @@
+Description: Create a variable number of EC2 instance resources.
+Parameters:
+  ImageId:
+    Description: Image ID to launch EC2 instances.
+    Type: AWS::EC2::Image::Id
+    # amzn-ami-hvm-2016.09.1.20161221-x86_64-gp2
+    Default: ami-02d0b1ffa5f16402d  #us-east-1 ami-026b57f3c383c2eec
+  InstanceType:
+    Description: Instance type to launch EC2 instances.
+    Type: String
+    Default: t3.large
+    # AllowedValues: [t3.large]
+  MachineName:
+    Description: The Name of The Machine 
+    Type: String
+    Default: KAFKA_NIFI
+    #MinValue: 1
+    #MaxValue: 10
+    #ConstraintDescription: Must be a number between 1 and 10.
+
+
+Resources:
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http to client host
+      VpcId: vpc-be807ed7
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags: 
+        - Key: Name
+          Value: KAFKA-NIFI
+  Instance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ImageId
+      KeyName: "KAFKA-NIFI"
+      InstanceType: !Ref InstanceType
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: 'False'
+          DeleteOnTermination: 'True'
+          SubnetId: subnet-6786b42d
+          DeviceIndex: '0'
+          GroupSet: [{ "Fn::GetAtt" : ["InstanceSecurityGroup", "GroupId"] }] 
+      BlockDeviceMappings:
+        - DeviceName: "/dev/xvda"
+          Ebs:
+              VolumeSize: 20
+      UserData:
+          Fn::Base64: 
+            !Sub |
+            #!/bin/bash   
+            sudo su
+            cd /home/ec2-user
+            # Install Prerequisites
+            yum update -y
+            yum install -y git
+            yum install -y wget
+            amazon-linux-extras install -y java-openjdk11
+            # Set ALL NEEDED EXPORTS in .bashrc
+            echo "export PS1=\"\[\e[32m\][\[\e[m\]\[\e[31m\]\u\[\e[m\]\[\e[33m\]@\[\e[m\]\[\e[32m\]\h\[\e[m\]:\[\e[36m\]\w\[\e[m\]\[\e[32m\]]\\$\[\e[m\] \" " > .bashrc 
+            . .bashrc
+            export JAVA_HOME="/usr/lib/jvm/java-11-openjdk-11.0.16.0.8-1.amzn2.0.1.x86_64"
+            export PATH=$PATH:$JAVA_HOME/bin  
+            # Download and unzip required packages
+            wget https://archive.apache.org/dist/kafka/3.2.3/kafka_2.13-3.2.3.tgz
+            tar -xzf kafka_2.13-3.2.3.tgz
+            wget https://dlcdn.apache.org/nifi/1.17.0/nifi-1.17.0-bin.zip
+            unzip -q nifi-1.17.0-bin.zip
+            # Modify Files as needed
+            sed -i 's/nifi.web.https.host=127.0.0.1/nifi.web.https.host=0.0.0.0/g' /home/ec2-user/nifi-1.17.0/conf/nifi.properties
+            sudo sed -i "s/nifi.web.proxy.host\=/nifi.web.proxy.host\=$(curl http://checkip.amazonaws.com):8443/g" /home/ec2-user/nifi-1.17.0/conf/nifi.properties
+            git clone https://github.com/Nhaila-Abdessamad/NIFI-KAFKA.git
+            mv NIFI-KAFKA/cacerts.jks /home/ec2-user/ 
+            # Start Kafka and Nifi Services
+            cd kafka_2.13-3.2.3
+            ./bin/kafka-server-start.sh config/server.properties >ks.log&
+            ./bin/zookeeper-server-start.sh config/zookeeper.properties > zk.log &
+            cd ..
+            cd nifi-1.17.0/ 
+            bin/nifi.sh start
+            echo "hello" > /home/ec2-user/nifi-credentials.info 
+            chmod 777  /home/ec2-user/nifi-credentials.info  
+            cat /home/ec2-user/nifi-1.17.0/logs/nifi-ap*.log | grep Generated > /home/ec2-user/nifi-credentials.info
+            cd ..
+            mkdir data
+            mkdir data/history
+            mkdir data/input
+      Tags: 
+        - Key: Name
+          Value: !Ref MachineName
+  EIP1:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref Instance1
+      Domain: vpc
